@@ -12,51 +12,47 @@ function checkRSS() {
 
   // RSS取得
   const response = UrlFetchApp.fetch(rssUrl);
-  const xml = XmlService.parse(response.getContentText());
+  const xml = XmlService.parse(sanitizeXmlEntities(response.getContentText()));
   const root = xml.getRootElement();
   const channel = root.getChild('channel');
   const items = channel.getChildren('item');
 
   if (items.length === 0) return;
 
-  // 前回チェック以降の新着記事をすべて抽出
-  // フィードは新しい順なので、lastLink が見つかるまでの記事が新着
-  let newItems = [];
-  if (!lastLink) {
-    // 初回実行時は最新記事のみ通知（全件通知を避けるため）
-    newItems = [items[0]];
-  } else {
-    for (let i = 0; i < items.length; i++) {
-      const link = items[i].getChildText('link');
-      if (link === lastLink) break;
-      newItems.push(items[i]);
-    }
-  }
-
-  if (newItems.length === 0) {
-    // 新着なし。最新記事の pubDate が変わっていれば更新通知
-    const latestItem = items[0];
-    const latestLink = latestItem.getChildText('link');
-    const latestPubDate = latestItem.getChildText('pubDate');
-    if (latestLink === lastLink && latestPubDate !== lastPubDate) {
-      const title = latestItem.getChildText('title');
-      sendLineBroadcast(lineToken, '更新記事', title, latestLink);
-      props.setProperty('LAST_PUB_DATE', latestPubDate);
-    }
-    return;
-  }
-
-  // 古い順（昇順）に通知する
-  newItems.reverse().forEach(item => {
-    const title = item.getChildText('title');
-    const link = item.getChildText('link');
-    sendLineBroadcast(lineToken, '新着記事', title, link);
-  });
-
-  // 最新記事の情報を保存
+  // 最新記事の情報を取得
   const latestItem = items[0];
-  props.setProperty('LAST_LINK', latestItem.getChildText('link'));
-  props.setProperty('LAST_PUB_DATE', latestItem.getChildText('pubDate'));
+  const title = latestItem.getChildText('title');
+  const link = latestItem.getChildText('link');
+  const pubDate = latestItem.getChildText('pubDate');
+
+  if (link !== lastLink) {
+    // 新着記事
+    sendLineBroadcast(lineToken, '新着記事', title, link);
+    props.setProperty('LAST_LINK', link);
+    props.setProperty('LAST_PUB_DATE', pubDate);
+  } else if (pubDate !== lastPubDate) {
+    // 同じリンクでも pubDate が変わっていたら更新記事として通知
+    sendLineBroadcast(lineToken, '更新記事', title, link);
+    props.setProperty('LAST_PUB_DATE', pubDate);
+  }
+}
+
+function sanitizeXmlEntities(text) {
+  const HTML_ENTITIES = {
+    'hellip': '…', 'nbsp': '\u00A0', 'mdash': '—', 'ndash': '–',
+    'ldquo': '\u201C', 'rdquo': '\u201D', 'lsquo': '\u2018', 'rsquo': '\u2019',
+    'bull': '•', 'copy': '©', 'reg': '®', 'trade': '™',
+    'laquo': '«', 'raquo': '»', 'middot': '·', 'times': '×',
+    'divide': '÷', 'euro': '€', 'pound': '£', 'yen': '¥',
+    'deg': '°', 'plusmn': '±', 'para': '¶', 'sect': '§',
+    'frac14': '¼', 'frac12': '½', 'frac34': '¾',
+  };
+  const VALID_XML_ENTITIES = new Set(['amp', 'lt', 'gt', 'apos', 'quot']);
+  return text.replace(/&([a-zA-Z]+);/g, (match, name) => {
+    if (VALID_XML_ENTITIES.has(name)) return match;
+    if (HTML_ENTITIES[name]) return HTML_ENTITIES[name];
+    return '&amp;' + name + ';'; // 未知のエンティティはエスケープ
+  });
 }
 
 function sendLineBroadcast(token, label, title, link) {
